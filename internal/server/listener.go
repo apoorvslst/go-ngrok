@@ -2,8 +2,8 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"sync"
 )
@@ -19,22 +19,22 @@ func StartListener(ctx context.Context, addr string) error {
 
 	go func() {
 		<-ctx.Done()
-		fmt.Println("\nShutdown signal received, stopping listener...")
+		slog.Info("\nShutdown signal received, stopping listener...")
 		listener.Close()
 	}()
 
-	fmt.Println("Listening on " + addr)
+	slog.Info("Listening on " + addr)
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
 				break
 			}
-			fmt.Println("Error accepting connection:", err)
+			slog.Error("Error accepting connection:", err)
 			continue
 		}
 
-		fmt.Println("New connection from " + conn.RemoteAddr().String())
+		slog.Info("New connection from " + conn.RemoteAddr().String())
 		wg.Add(1)
 		go func(c net.Conn) {
 			defer wg.Done()
@@ -42,20 +42,19 @@ func StartListener(ctx context.Context, addr string) error {
 		}(conn)
 	}
 
-	fmt.Println("Waiting for active connections to finish...")
+	slog.Info("Waiting for active connections to finish...")
 	wg.Wait()
-	fmt.Println("All connections done. Server stopped.")
+	slog.Info("All connections done. Server stopped.")
 	return nil
 }
 
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 
-	fmt.Println("Handling connection from " + conn.RemoteAddr().String())
+	slog.Info("Handling connection from " + conn.RemoteAddr().String())
 	_, err := io.Copy(conn, conn)
 	if err != nil {
-		fmt.Println("Connection error", err)
+		slog.Error("Connection error", err)
 	}
-	fmt.Println("Connection closed from " + conn.RemoteAddr().String())
+	slog.Info("Connection closed from " + conn.RemoteAddr().String())
 }
-
