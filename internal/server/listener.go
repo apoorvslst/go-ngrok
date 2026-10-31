@@ -1,36 +1,60 @@
 package server
 
 import (
-	"fmt"
+	"context"
+	"io"
+	"log/slog"
 	"net"
+	"sync"
 )
 
-// StartListener binds to the given address and listens for incoming TCP connections.
-// uppercase S => public smaller s in function name => private
-func StartListener(addr string) error {
-	// vahi yar server listening wala scene
+func StartListener(ctx context.Context, addr string) error {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("failed to bind to %s: %w", addr, err)
+		return err
 	}
-	//Schedules listener.Close() to run right before StartListener exits.
-	//Ensures the OS releases the port and closes the socket descriptor, preventing socket leaks.
 	defer listener.Close()
-	// defer and close yaad rakhna it's imp
 
-	fmt.Printf("GoNgrok Server listening on %s\n", addr)
+	var wg sync.WaitGroup
 
+	go func() {
+		<-ctx.Done()
+		slog.Info("\nShutdown signal received, stopping listener...")
+		listener.Close()
+	}()
+
+	slog.Info("Listening on " + addr)
 	for {
-		// vahi yar Accept() is a blocking call jb tk accept nahi hoga yahi pe ruka rahega
 		conn, err := listener.Accept()
 		if err != nil {
-			fmt.Printf("Failed to accept connection: %v\n", err)
+			if ctx.Err() != nil {
+				break
+			}
+			slog.Error("Error accepting connection:", err)
 			continue
 		}
 
-		fmt.Printf("New connection accepted from %s\n", conn.RemoteAddr().String())
-
-		// For now, close immediately. We will handle echo/tunneling in Step 7.
-		conn.Close()
+		slog.Info("New connection from " + conn.RemoteAddr().String())
+		wg.Add(1)
+		go func(c net.Conn) {
+			defer wg.Done()
+			handleConnection(c)
+		}(conn)
 	}
+
+	slog.Info("Waiting for active connections to finish...")
+	wg.Wait()
+	slog.Info("All connections done. Server stopped.")
+	return nil
+}
+
+func handleConnection(conn net.Conn) {
+	defer conn.Close()
+
+	slog.Info("Handling connection from " + conn.RemoteAddr().String())
+	_, err := io.Copy(conn, conn)
+	if err != nil {
+		slog.Error("Connection error", err)
+	}
+	slog.Info("Connection closed from " + conn.RemoteAddr().String())
 }

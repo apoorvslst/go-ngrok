@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 	
-	"github.com/devGPP23/go-ngrok/internal/client"
+	"github.com/apoorvslst/go-ngrok/internal/client"
 )
 
 func main() {

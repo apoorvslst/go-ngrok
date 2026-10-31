@@ -1,18 +1,22 @@
 package main
 
 import (
-	"fmt"
-	"log"
+	"context"
+	"log/slog"
+	"os"
+	"os/signal"
 
-	"github.com/devGPP23/go-ngrok/internal/server"
+	"github.com/apoorvslst/go-ngrok/internal/config"
+	"github.com/apoorvslst/go-ngrok/internal/server"
 )
 
 func main() {
-	fmt.Println("GoNgrok Server starting...")
-	// starting listen for customers
-	
-	err := server.StartListener(":9000")
+	config.SetupLogger(true)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	err := server.StartListener(ctx, ":9000")
 	if err != nil {
-		log.Fatalf("Server error: %v", err)
+		slog.Error("Error starting server:", err)
 	}
 }

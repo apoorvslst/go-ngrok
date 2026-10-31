@@ -1,3 +1,3 @@
-module github.com/devGPP23/go-ngrok
+module github.com/apoorvslst/go-ngrok
 
 go 1.26.4
