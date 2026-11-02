@@ -21,3 +21,5 @@ go.work
 .idea/
 .vscode/
 *.swp
+
+BEFORE_YOU_CODE.md

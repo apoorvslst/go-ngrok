@@ -116,7 +116,7 @@ func PerformHandshake(conn net.Conn, validToken string, domainRoot string) (*pro
 }
 
 /*
-💡 Real-World Flow Example:
+ Real-World Flow Example:
 Imagine a user named Rahul wants to expose his local Node.js server (localhost:3000) to the internet.
 
 1. Rahul runs in his terminal:
@@ -141,7 +141,7 @@ Imagine a user named Rahul wants to expose his local Node.js server (localhost:3
    The handshake is complete, the 5-second timer is turned off, and the tunnel is ready to stream traffic!
 
 -----------------------------------------------------------------------------
-🌐 HOW THE URL IS FORMED & HOW TRAFFIC REACHES RAHUL'S LAPTOP:
+ HOW THE URL IS FORMED & HOW TRAFFIC REACHES RAHUL'S LAPTOP:
 
 1. HOW THE STRING IS CONSTRUCTED:
    assignedURL := fmt.Sprintf("https://%s.%s", hello.DesiredSubdomain, domainRoot)
