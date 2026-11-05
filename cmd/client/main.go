@@ -2,21 +2,45 @@ package main
 
 import (
 	"fmt"
-	"log"
-	
+	"log/slog"
+	"os"
+
 	"github.com/apoorvslst/go-ngrok/internal/client"
+	"github.com/apoorvslst/go-ngrok/internal/config"
 )
 
 func main() {
-	fmt.Println("GoNgrok Client starting...")
+	config.SetupLogger(true)
+
+	token := "secret123"
+	desiredSubdomain := "gaurav"
+
+	slog.Info("GoNgrok Client starting...", "subdomain", desiredSubdomain)
 
 	// 1. Server se connect karo
 	conn, err := client.Connect("localhost:9000")
 	if err != nil {
-		log.Fatalf("Client error: %v", err)
+		slog.Error("Connection error:", "err", err)
+		os.Exit(1)
 	}
 	defer conn.Close()
-    client.HandleEcho(conn); // interactive echo session to check things out 
 
-	fmt.Println("Client closing connection and exiting.")
+	// 2. Handshake perform karo kuch bhi read karne se pehle 
+	authResp, err := client.PerformClientHandshake(conn, token, desiredSubdomain)
+	if err != nil {
+		slog.Error("Handshake failed:", "err", err)
+		os.Exit(1)
+	}
+
+	// 3. Awesome Success Banner!
+	/*// Client apna desired subdomain ("gaurav") bhejta hai.
+// Server use domainRoot ("tunnel.dev") ke saath jod kar "https://gaurav.tunnel.dev" banata hai 
+// aur AuthResponseMessage mein pack karke client ko wapas bhej deta hai.*/
+	fmt.Printf("TUNNEL LIVE AT: %s\n", authResp.AssignedURL)
+	fmt.Println("Press Ctrl+C to quit.")
+
+	// 4. Interactive Echo
+	client.HandleEcho(conn)
+
+	slog.Info("Client closing connection and exiting.")
 }

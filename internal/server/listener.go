@@ -8,7 +8,7 @@ import (
 	"sync"
 )
 
-func StartListener(ctx context.Context, addr string) error {
+func StartListener(ctx context.Context, addr string, validToken string, domainRoot string) error {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
@@ -17,6 +17,7 @@ func StartListener(ctx context.Context, addr string) error {
 
 	var wg sync.WaitGroup
 
+	// Graceful shutdown listener
 	go func() {
 		<-ctx.Done()
 		slog.Info("\nShutdown signal received, stopping listener...")
@@ -30,7 +31,7 @@ func StartListener(ctx context.Context, addr string) error {
 			if ctx.Err() != nil {
 				break
 			}
-			slog.Error("Error accepting connection:", err)
+			slog.Error("Error accepting connection:", "err", err)
 			continue
 		}
 
@@ -38,7 +39,7 @@ func StartListener(ctx context.Context, addr string) error {
 		wg.Add(1)
 		go func(c net.Conn) {
 			defer wg.Done()
-			handleConnection(c)
+			handleConnection(c, validToken, domainRoot)
 		}(conn)
 	}
 
@@ -48,13 +49,29 @@ func StartListener(ctx context.Context, addr string) error {
 	return nil
 }
 
-func handleConnection(conn net.Conn) {
+func handleConnection(conn net.Conn, validToken string, domainRoot string) {
 	defer conn.Close()
+	remoteAddr := conn.RemoteAddr().String()
 
-	slog.Info("Handling connection from " + conn.RemoteAddr().String())
-	_, err := io.Copy(conn, conn)
+	// 1. Perform Handshake (5-second timeout ke andar)
+	hello, err := PerformHandshake(conn, validToken, domainRoot)
 	if err != nil {
-		slog.Error("Connection error", err)
+		slog.Warn("handshake aborted", "remote_addr", remoteAddr, "err", err)
+		return
 	}
-	slog.Info("Connection closed from " + conn.RemoteAddr().String())
+
+	slog.Info("client authenticated successfully!",
+		"remote_addr", remoteAddr,
+		"subdomain", hello.DesiredSubdomain,
+		"os", hello.OSPlatform,
+		"version", hello.ClientVersion,
+	)
+
+	// 2. Handshake pass hone ke baad echo chalu
+	slog.Info("handling connection from " + remoteAddr)
+	_, err = io.Copy(conn, conn)
+	if err != nil {
+		slog.Error("Connection error", "err", err)
+	}
+	slog.Info("Connection closed from " + remoteAddr)
 }

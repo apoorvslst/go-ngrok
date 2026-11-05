@@ -10,13 +10,17 @@ import (
 	"github.com/apoorvslst/go-ngrok/internal/server"
 )
 
+//Server ke main.go mein hardcoded token aur domain root pass
 func main() {
 	config.SetupLogger(true)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	err := server.StartListener(ctx, ":9000")
+	validToken := "secret123"
+	domainRoot := "tunnel.dev"
+
+	err := server.StartListener(ctx, ":9000", validToken, domainRoot)
 	if err != nil {
-		slog.Error("Error starting server:", err)
+		slog.Error("Error starting server:", "err", err)
 	}
 }
