@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/apoorvslst/go-ngrok/internal/server/registry"
 )
@@ -70,14 +71,15 @@ func handleConnection(conn net.Conn, validToken string, domainRoot string, reg *
 	}
 	defer session.Close()
 
-	// 3. Register the active tunnel in the shared in-memory registry
-	if err := reg.Register(hello.DesiredSubdomain, session, remoteAddr); err != nil {
+	// 3. Register or Reclaim the active tunnel in the shared in-memory registry
+	if err := reg.Register(hello.DesiredSubdomain, session, remoteAddr, hello.Token); err != nil {
 		slog.Error("failed to register tunnel in registry", "subdomain", hello.DesiredSubdomain, "err", err)
 		return
 	}
-	defer reg.Delete(hello.DesiredSubdomain)
+	// On disconnect: don't delete! Hold the reservation for 45s so the client can reconnect.
+	defer reg.MarkGracePeriod(hello.DesiredSubdomain, 45*time.Second)
 
-	slog.Info("client authenticated & tunnel registered!",
+	slog.Info("client authenticated & tunnel active!",
 		"remote_addr", remoteAddr,
 		"subdomain", hello.DesiredSubdomain,
 		"os", hello.OSPlatform,
@@ -86,39 +88,5 @@ func handleConnection(conn net.Conn, validToken string, domainRoot string, reg *
 
 	// 4. Wait for the session to terminate (client disconnects or error)
 	<-session.CloseChan()
-	slog.Info("session terminated", "subdomain", hello.DesiredSubdomain)
+	slog.Info("session terminated, holding in grace period", "subdomain", hello.DesiredSubdomain)
 }
-
-/*
- 💡 Real-World Flow Example: Listener Lifecycle & Connection Concurrency
-
- Imagine our tunnel server running on a VPS (:9000).
-
- 1. SERVER BOOTSTRAP:
-    StartListener(ctx, ":9000", "dev-secret-token", "tunnel.dev", reg)
-    - net.Listen("tcp", ":9000") binds to OS TCP port 9000.
-    - A background goroutine waits on <-ctx.Done() to handle graceful shutdown.
-    - Server enters the infinite Accept() loop.
-
- 2. INCOMING CLIENT CONNECTION:
-    Rahul runs his CLI client, which dials our server (:9000).
-    - listener.Accept() unblocks and returns a net.Conn (a raw TCP socket).
-    - wg.Add(1) tracks the active connection for graceful shutdown.
-    - go handleConnection(...) spawns an independent, lightweight goroutine.
-    - The main loop immediately returns to Accept() to wait for the next user (e.g. Gaurav)!
-
- 3. INSIDE handleConnection(conn, ...):
-    - defer conn.Close() ensures the socket is NEVER leaked, even on panic or error.
-    - Step A: PerformHandshake(conn, ...) validates Rahul's token and "rahul-app" subdomain
-      under a strict 5-second deadline.
-    - Step B: Wraps the raw TCP connection in a Yamux multiplexer session.
-    - Step C: reg.Register("rahul", session, addr) links the subdomain to this active session.
-      defer reg.Delete("rahul") ensures the entry is cleaned up on disconnect.
-    - Step D: <-session.CloseChan() waits cleanly until the client closes the tunnel.
-
- 4. GRACEFUL SERVER SHUTDOWN (Ctrl+C):
-    - User presses Ctrl+C -> ctx.Done() closes.
-    - Background goroutine calls listener.Close(), unblocking Accept().
-    - wg.Wait() pauses server exit until Rahul and all other active clients finish.
-    - Zero truncated requests, zero orphaned sockets!
-*/

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"time"
 
 	"github.com/apoorvslst/go-ngrok/internal/server/registry"
 	"github.com/apoorvslst/go-ngrok/internal/server/router"
@@ -30,15 +31,22 @@ func NewTunnelProxy(reg *registry.Registry, rootDomain string) http.Handler {
 			return
 		}
 
-		// 3. Check if the yamux session is still alive
-		if tunnel.Session.IsClosed() {
-			reg.Delete(subdomain)
-			slog.Warn("client session is closed, removing from registry", "subdomain", subdomain)
-			http.Error(w, "Tunnel client disconnected", http.StatusBadGateway)
+		// 3. Check if tunnel is in Grace Period (temporarily disconnected) or session is nil
+		if tunnel.State == registry.StateGracePeriod || tunnel.Session == nil {
+			slog.Info("tunnel is in grace period, client reconnecting", "subdomain", subdomain)
+			http.Error(w, "503 Service Unavailable: Tunnel is reconnecting, please retry in a moment", http.StatusServiceUnavailable)
 			return
 		}
 
-		// 4. Build ReverseProxy with custom DialContext (THE YAMUX TRICK)
+		// 4. Check if the yamux session is closed
+		if tunnel.Session.IsClosed() {
+			reg.MarkGracePeriod(subdomain, 45*time.Second)
+			slog.Warn("client session is closed, entered grace period", "subdomain", subdomain)
+			http.Error(w, "503 Service Unavailable: Tunnel client disconnected", http.StatusServiceUnavailable)
+			return
+		}
+
+		// 5. Build ReverseProxy with custom DialContext (THE YAMUX TRICK)
 		proxy := &httputil.ReverseProxy{
 			// Director prepares the request before sending it to the client
 			Director: func(req *http.Request) {
@@ -78,35 +86,3 @@ func NewTunnelProxy(reg *registry.Registry, rootDomain string) http.Handler {
 		proxy.ServeHTTP(w, r)
 	})
 }
-
-/*
-================================================================================
- REAL-WORLD EXAMPLE: The VIP Courier Service (The Yamux ReverseProxy Trick)
-================================================================================
-
-SCENARIO:
-A customer (Visitor in London) wants an item from Apoorv's private workshop (Laptop at Home).
-
-Normally:
-- A postal worker (Nginx / standard ReverseProxy) would drive directly to Apoorv's house
-  using net.Dial("tcp", "house_address").
-- BUT Apoorv's house has a private gated community that blocks all outside visitors!
-  The postal worker gets stuck outside (Connection Refused / NAT block).
-
-HOW THIS FILE SOLVES IT (The DialContext Trick):
-1. Apoorv previously hired a dedicated private courier van (the Yamux TCP connection)
-   that drives to the Central Post Office (our Cloud Server) and parks at the dock all day.
-2. When the London customer's order arrives at the Central Post Office (Port :8080):
-   - The receptionist (router.ExtractSubdomain) reads the label: "Order for Apoorv".
-   - Checks the ledger (reg.Get("apoorv")): "Yes, Apoorv's van is parked at Bay 4!".
-3. THE MAGIC (Transport.DialContext):
-   - Instead of trying to send a new delivery van across the city, the Post Office
-     simply opens a box (tunnel.Session.OpenStream()) and places the order into
-     Apoorv's already-parked courier van!
-   - Go's ReverseProxy doesn't care whether it's a real road or a private van —
-     as long as it implements net.Conn, the package is delivered!
-4. Apoorv's van instantly receives the box, walks inside the workshop (localhost:3000),
-   gets the product, and hands it back up the same route to the London customer.
-================================================================================
-*/
-
