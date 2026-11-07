@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"net"
 	"sync"
@@ -66,12 +65,17 @@ func handleConnection(conn net.Conn, validToken string, domainRoot string) {
 		"os", hello.OSPlatform,
 		"version", hello.ClientVersion,
 	)
-
-	// 2. Handshake pass hone ke baad echo chalu
-	slog.Info("handling connection from " + remoteAddr)
-	_, err = io.Copy(conn, conn)
+// 2. Physical TCP connection ko Yamux Server session mein elevate karo
+	session, err := NewYamuxServerSession(conn)  // we are doing TCP to Yamux session conversion 
 	if err != nil {
-		slog.Error("Connection error", "err", err)
+		slog.Error("failed to create yamux server session", "err", err)
+		return
 	}
-	slog.Info("Connection closed from " + remoteAddr)
+	defer session.Close()
+	
+	slog.Info("yamux session established! Starting multiplexing test...")
+	// 3. Ek hi second mein 10 parallel virtual streams launch karo!
+	DispatchTestStreams(session, 10)
+	slog.Info("multiplexing test completed for client", "remote_addr", remoteAddr)
+
 }
