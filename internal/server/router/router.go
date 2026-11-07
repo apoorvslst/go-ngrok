@@ -1,22 +1,3 @@
-/*Jab koi visitor browser mein kholta hai: https://gaurav.tunnel.dev:8080/api/users
-Browser server ko yeh HTTP header bhejta hai:
-GET /api/users HTTP/1.1
-Host: gaurav.tunnel.dev:8080
-
-IMP : Is Host header se server ko pehchanna hai ki kis tunnel ko request forward karni hai. Is technique ko Virtual Hosting bolte hain.
-Humein ek function chahiye jo kisi bhi tarah ke host header se safely clean subdomain nikaal sake:
-
-"gaurav.tunnel.dev:8080" 
-→ Port hatao 
-→ "gaurav"
-"GAURAV.Tunnel.Dev" 
-→ Lowercase karo → "gaurav"
-"tunnel.dev" (bina subdomain) → Error!
-"google.com" (anpadh domain) → Error!
-*/
-
-// APAN BAS EK HEADER PARSER KAR RHE 
-
 package router
 
 import (
@@ -25,33 +6,47 @@ import (
 	"strings"
 )
 
+/*
+================================================================================
+ REAL-WORLD EXAMPLE: Mail Sorting Room (Router)
+================================================================================
+
+Role Definitions:
+- VISITOR: A person sending a letter addressed to "apoorv.tunnel.dev:8080".
+- ROUTER (ExtractSubdomain): The postal worker who reads the envelope, strips
+  the postal code (:8080) and city ("tunnel.dev"), and extracts just the
+  recipient's mailbox name: "apoorv".
+================================================================================
+*/
+
 // ExtractSubdomain parses the Host header and extracts the subdomain prefix.
-// Example: hostHeader="gaurav.tunnel.dev:8080", rootDomain="tunnel.dev" -> "gaurav"
+// Example: hostHeader="apoorv.tunnel.dev:8080", rootDomain="tunnel.dev" -> "apoorv"
 func ExtractSubdomain(hostHeader string, rootDomain string) (string, error) {
-	// 1. Agar port number laga hai (jaise :8080), toh port strip karo
+	// 1. Strip port number if present (e.g. "apoorv.tunnel.dev:8080" -> "apoorv.tunnel.dev")
 	host, _, err := net.SplitHostPort(hostHeader)
 	if err != nil {
-		// SplitHostPort tab fail hota hai jab port na ho — that's fine, original use karo
+		// SplitHostPort fails when there is no port (e.g. "apoorv.tunnel.dev") — that's fine
 		host = hostHeader
 	}
 
-	// 2. DNS case-insensitive hota hai, isliye sab lowercase karo
+	// 2. Lowercase for case-insensitive comparison (DNS is case-insensitive)
 	host = strings.ToLower(host)
 	rootDomain = strings.ToLower(rootDomain)
 
-	// 3. Check karo ki host humare root domain pe end hota hai ya nahi
+	// 3. Check if host ends with our root domain
 	suffix := "." + rootDomain
 	if !strings.HasSuffix(host, suffix) {
 		return "", fmt.Errorf("host '%s' is not a subdomain of '%s'", host, rootDomain)
 	}
 
-	// 4. Root domain wala suffix hata do (sirf subdomain bachega)
+	// 4. Extract subdomain by trimming the suffix
 	subdomain := strings.TrimSuffix(host, suffix)
 
-	// 5. Check karo ki subdomain khali toh nahi reh gaya
+	// 5. Validate non-empty
 	if subdomain == "" {
 		return "", fmt.Errorf("no subdomain found in host '%s'", hostHeader)
 	}
 
 	return subdomain, nil
 }
+

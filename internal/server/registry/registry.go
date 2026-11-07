@@ -1,18 +1,4 @@
-/*Tumhare server ke port :8080 pe internet se visitor request aati hai: Host: gaurav.tunnel.dev
-Server ko kaise pata chalega ki:
-"gaurav" subdomain kis laptop ka hai?
-Iska active yamux.Session kaunsa hai?
-Aur agar ek second mein 1,000 visitors aa jayein, toh kya map read karte waqt race condition ya crash nahi hoga?
-
-Day 4 me Humne banaya Thread-Safe In-Memory Registry (sync.RWMutex ke sath) jo subdomain ko active yamux session se link karegi!*/
-
-package registry  // iss package ka naam yaad rakhna
-
-/*Concept of sync.RWMutex
-Normal sync.Mutex mein agar 1,000 readers aate hain, toh sabko line mein khada rehna padta hai (slow).
-sync.RWMutex (Reader-Writer Lock):
-RLock() (Read Lock): 10,000 visitors ek saath map ko padh sakte hain, koi kisi ka wait nahi karega!
-Lock() (Write Lock): Sirf tab lagega jab koi naya client connect (Register) ya disconnect (Delete) ho.*/
+package registry
 
 import (
 	"fmt"
@@ -23,7 +9,7 @@ import (
 	"github.com/hashicorp/yamux"
 )
 
-// Tunnel represents a single registered client tunnel.
+// Tunnel represents an active reverse tunnel connection from a client.
 type Tunnel struct {
 	Subdomain  string
 	Session    *yamux.Session
@@ -31,13 +17,13 @@ type Tunnel struct {
 	CreatedAt  time.Time
 }
 
-// Registry holds the in-memory mapping of subdomain -> active tunnel.
+// Registry holds all registered tunnels safely across multiple goroutines.
 type Registry struct {
 	mu      sync.RWMutex
 	tunnels map[string]*Tunnel
 }
 
-// NewRegistry creates an empty, initialized tunnel registry.
+// NewRegistry initializes and returns a ready-to-use Registry.
 func NewRegistry() *Registry {
 	return &Registry{
 		tunnels: make(map[string]*Tunnel),
@@ -49,7 +35,7 @@ func (r *Registry) Register(subdomain string, session *yamux.Session, addr strin
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Subdomain collision check
+	// Comma-ok idiom: 'ok' is true if the key exists in the map
 	if existing, ok := r.tunnels[subdomain]; ok {
 		return fmt.Errorf("subdomain '%s' already registered by client %s", subdomain, existing.ClientAddr)
 	}
@@ -70,14 +56,14 @@ func (r *Registry) Get(subdomain string) (*Tunnel, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	tunnel, ok := r.tunnels[subdomain]  // tunnnels me se appropriate subdomain khoj lo 
+	tunnel, ok := r.tunnels[subdomain]
 	return tunnel, ok
 }
 
-// Delete removes a tunnel from the registry on client disconnect.
+// Delete removes a tunnel from the registry (on client disconnect).
 func (r *Registry) Delete(subdomain string) {
-	r.mu.Lock()  // ate hi lock 
-	defer r.mu.Unlock()   // delete hone ke baad unlock
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	if _, ok := r.tunnels[subdomain]; ok {
 		delete(r.tunnels, subdomain)
@@ -85,10 +71,54 @@ func (r *Registry) Delete(subdomain string) {
 	}
 }
 
-// ActiveCount returns the total number of currently connected tunnels.
+// ActiveCount returns how many tunnels are currently connected.
 func (r *Registry) ActiveCount() int {
 	r.mu.RLock()
-	defer r.mu.RUnlock()  // readlock = Rlock
+	defer r.mu.RUnlock()
 
 	return len(r.tunnels)
 }
+
+/*
+================================================================================
+ REAL-LIFE ANALOGY: The Hotel Receptionist Desk (Registry)
+================================================================================
+
+Imagine our server is a modern hotel with a private intercom system:
+
+1. NewRegistry():
+   -> "Setting up the front desk register"
+   When the hotel opens in the morning, the receptionist buys a fresh, empty
+   guest ledger book (`make(map[string]*Tunnel)`). Without this book, trying
+   to write down names would make you write on thin air (nil pointer panic!).
+
+2. Register("apoorv", session, "192.168.1.5:54321"):
+   -> "Guest check-in"
+   You walk in and say: "I want room name 'apoorv' and here is my private intercom
+   phone (yamux.Session)".
+   - The receptionist grabs the ONLY pen (mu.Lock() - exclusive write).
+   - Checks the book: Is someone already in 'apoorv'? If yes, reject!
+   - If free, writes down your details and intercom line in the book.
+   - Puts down the pen (defer mu.Unlock()).
+
+3. Get("apoorv"):
+   -> "Delivery person arrives"
+   A delivery driver walks in with a pizza for "apoorv.tunnel.dev".
+   - They look up at the electronic display board (mu.RLock() - read only).
+   - 100 delivery drivers can look at the board at the EXACT SAME TIME without
+     bumping into each other.
+   - They find your intercom line (yamux.Session) to buzz your room directly!
+
+4. Delete("apoorv"):
+   -> "Guest check-out"
+   You pack your bags, close your laptop, and disconnect.
+   - The receptionist grabs the pen (mu.Lock() - exclusive write).
+   - Crosses your name off the register so room 'apoorv' is free again.
+
+5. ActiveCount():
+   -> "Manager morning check"
+   The hotel manager asks: "How many rooms are occupied right now?"
+   - Receptionist counts the lines on the board (mu.RLock()).
+   - Returns how many tunnels are alive.
+================================================================================
+*/

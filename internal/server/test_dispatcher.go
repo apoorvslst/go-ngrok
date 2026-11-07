@@ -1,67 +1,88 @@
-//Humein Server side pe ek function banana hai jo yeh test karega ki: Kya Server ek single TCP connection ke andar ek hi second
-//  mein 10 parallel streams open karke unpe data bhej aur receive kar sakta hai?
 package server
 
 import (
 	"fmt"
-	"io"
 	"log/slog"
 	"sync"
 
 	"github.com/hashicorp/yamux"
 )
 
-// DispatchTestStreams opens 'count - kuchi bhi x number' concurrent virtual streams over the session to verify multiplexing.
+// DispatchTestStreams opens 'count' parallel virtual streams over a single Yamux session.
+// This proves that multiplexing allows multiple concurrent requests without head-of-line blocking.
 func DispatchTestStreams(session *yamux.Session, count int) {
-	var wg sync.WaitGroup  // wg is waitgroup ye counter hota hai 
-	// agar wg.add(1) likha so har process ke baad wg me ek jud jayega
+	var wg sync.WaitGroup
 
-	slog.Info("dispatching concurrent test streams over single TCP pipe", "stream_count", count)
+	slog.Info("starting test stream dispatch", "total_streams", count)
 
 	for i := 1; i <= count; i++ {
 		wg.Add(1)
-        // loop me goroutine bhaisahab SUPER DUPER 
-		// Har stream ko ek alag parallel goroutine mein chalate hain
-		go func(streamIndex int) {
-			defer wg.Done()  // isse counter (reduce hota h -1 se)
 
-			// 1. Naya virtual channel open karo (Server -> Client)
+		go func(id int) {
+			defer wg.Done()
+
+			// 1. Open a new logical virtual stream over the existing TCP connection
 			stream, err := session.OpenStream()
 			if err != nil {
-				slog.Error("failed to open virtual stream", "index", streamIndex, "err", err)
+				slog.Error("failed to open virtual stream", "stream_id", id, "err", err)
 				return
 			}
+			// Always close the stream when done to release stream ID and memory buffers
 			defer stream.Close()
 
-			slog.Info("opened virtual stream",
-				"stream_index", streamIndex,
-				"stream_id", stream.StreamID(),
-			)
+			slog.Info("opened virtual stream", "stream_id", id, "yamux_stream_id", stream.StreamID())
 
-			// 2. Stream ke andar test payload likho
-			payload := fmt.Sprintf("Ping from visitor request #%d", streamIndex)
+			// 2. Send test payload to the client over this virtual stream
+			payload := fmt.Sprintf("Ping from server on virtual stream %d\n", id)
 			_, err = stream.Write([]byte(payload))
 			if err != nil {
-				slog.Error("failed to write to stream", "stream_id", stream.StreamID(), "err", err)
+				slog.Error("failed to write to virtual stream", "stream_id", id, "err", err)
 				return
 			}
 
-			// 3. Client se wapas aane wala response read karo
-			buf := make([]byte, 1024)
+			// 3. Read the client's reply from the virtual stream
+			buf := make([]byte, 256)
 			n, err := stream.Read(buf)
-			if err != nil && err != io.EOF {
-				slog.Error("failed to read reply from stream", "stream_id", stream.StreamID(), "err", err)
+			if err != nil {
+				slog.Error("failed to read from virtual stream", "stream_id", id, "err", err)
 				return
 			}
 
-			slog.Info("received client reply over virtual stream",
-				"stream_id", stream.StreamID(),
+			slog.Info("received reply over virtual stream",
+				"stream_id", id,
+				"yamux_stream_id", stream.StreamID(),
 				"reply", string(buf[:n]),
 			)
 		}(i)
 	}
 
-	// Wait karo jab tak saari 10 streams apna kaam poora na kar lein
-	wg.Wait()  // tb tk aage nahi badhega hb tk counter 0 na ho kyunki goroutine/process me +1 and -1 hota hai
-	slog.Info("all concurrent test streams completed successfully!")
+	// Wait for all parallel streams to finish their roundtrip before returning
+	wg.Wait()
+	slog.Info("all test streams completed successfully", "total_streams", count)
 }
+
+/*
+ 💡 Real-World Flow Example: How DispatchTestStreams Works
+
+ Imagine Rahul has 10 visitors at the same time:
+
+ 1. SERVER LAUNCHES 10 GOROUTINES IN PARALLEL:
+    DispatchTestStreams(session, 10)
+    - Loops 1 to 10 and launches 10 independent goroutines.
+    - Each goroutine calls session.OpenStream().
+
+ 2. WHAT HAPPENS ON THE WIRE (Multiplexing):
+    - All 10 streams share the SAME single TCP socket to Rahul's laptop!
+    - Yamux assigns:
+      Stream 1  -> Yamux StreamID 1
+      Stream 2  -> Yamux StreamID 3
+      ...
+      Stream 10 -> Yamux StreamID 19
+    - Their data chunks are interleaved over the wire without colliding.
+
+ 3. ROUNDTRIP VERIFICATION:
+    - Server writes: "Ping from server on virtual stream 1"
+    - Rahul's client reads it and replies: "Hello from client over virtual stream!"
+    - Server reads the reply and logs it.
+    - wg.Wait() ensures all 10 parallel requests complete before moving on.
+*/
