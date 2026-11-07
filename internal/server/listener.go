@@ -5,9 +5,10 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"github.com/apoorvslst/go-ngrok/internal/server/registry"
 )
 
-func StartListener(ctx context.Context, addr string, validToken string, domainRoot string) error {
+func StartListener(ctx context.Context, addr string, validToken string, domainRoot string, reg *registry.Registry) error {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
@@ -37,9 +38,11 @@ func StartListener(ctx context.Context, addr string, validToken string, domainRo
 		slog.Info("New connection from " + conn.RemoteAddr().String())
 		wg.Add(1)
 		go func(c net.Conn) {
-			defer wg.Done()
-			handleConnection(c, validToken, domainRoot)
-		}(conn)
+    defer wg.Done()
+    handleConnection(c, validToken, domainRoot, reg)
+}(conn)
+
+
 	}
 
 	slog.Info("Waiting for active connections to finish...")
@@ -48,7 +51,7 @@ func StartListener(ctx context.Context, addr string, validToken string, domainRo
 	return nil
 }
 
-func handleConnection(conn net.Conn, validToken string, domainRoot string) {
+func handleConnection(conn net.Conn, validToken string, domainRoot string, reg *registry.Registry) {
 	defer conn.Close()
 	remoteAddr := conn.RemoteAddr().String()
 
@@ -65,17 +68,27 @@ func handleConnection(conn net.Conn, validToken string, domainRoot string) {
 		"os", hello.OSPlatform,
 		"version", hello.ClientVersion,
 	)
-// 2. Physical TCP connection ko Yamux Server session mein elevate karo
-	session, err := NewYamuxServerSession(conn)  // we are doing TCP to Yamux session conversion 
+
+	// 2. Physical TCP connection ko Yamux Server session mein elevate karo
+	session, err := NewYamuxServerSession(conn)
 	if err != nil {
 		slog.Error("failed to create yamux server session", "err", err)
 		return
 	}
 	defer session.Close()
-	
-	slog.Info("yamux session established! Starting multiplexing test...")
-	// 3. Ek hi second mein 10 parallel virtual streams launch karo!
-	DispatchTestStreams(session, 10)
-	slog.Info("multiplexing test completed for client", "remote_addr", remoteAddr)
 
+	// 3. Tunnel ko in-memory registry mein register karo!
+	err = reg.Register(hello.DesiredSubdomain, session, remoteAddr)
+	if err != nil {
+		slog.Error("failed to register tunnel", "subdomain", hello.DesiredSubdomain, "err", err)
+		return
+	}
+	// Jab yeh connection khatam hoga, registry se automatically delete ho jayega!
+	defer reg.Delete(hello.DesiredSubdomain)
+
+	slog.Info("tunnel registered and live", "subdomain", hello.DesiredSubdomain)
+
+	// 4. Session jab tak client close na kare, tab tak connection hold karo
+	<-session.CloseChan()
+	slog.Info("client disconnected, tunnel deregistered", "subdomain", hello.DesiredSubdomain)
 }
