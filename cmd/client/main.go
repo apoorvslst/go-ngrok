@@ -12,8 +12,9 @@ import (
 func main() {
 	config.SetupLogger(true)
 
-	token := "secret123"
-	desiredSubdomain := "gaurav"
+	token := "dev-secret-token"
+desiredSubdomain := "gaurav"
+localTarget := "localhost:3000" // Humara local web app yahan chalega!
 
 	slog.Info("GoNgrok Client starting...", "subdomain", desiredSubdomain)
 
@@ -48,6 +49,6 @@ func main() {
 	defer session.Close()
 	slog.Info("Yamux client session ready. Waiting for virtual streams from server...")
 	// 5. Incoming virtual streams ka intezar karo (blocking loop)
-	client.ListenForServerStreams(session)
+	client.ListenForServerStreams(session,localTarget)
 	slog.Info("Client closing connection and exiting.")
 }
