@@ -12,8 +12,8 @@ import (
 func main() {
 	config.SetupLogger(true)
 
-	token := "secret123"
-	desiredSubdomain := "gaurav"
+	token := "dev-secret-token"
+	desiredSubdomain := "apoorv"
 
 	slog.Info("GoNgrok Client starting...", "subdomain", desiredSubdomain)
 
@@ -25,28 +25,27 @@ func main() {
 	}
 	defer conn.Close()
 
-	// 2. Handshake perform karo kuch bhi read karne se pehle 
+	// 2. Handshake perform karo
 	authResp, err := client.PerformClientHandshake(conn, token, desiredSubdomain)
 	if err != nil {
 		slog.Error("Handshake failed:", "err", err)
 		os.Exit(1)
 	}
 
-	// 3. Awesome Success Banner!
-	/*// Client apna desired subdomain ("gaurav") bhejta hai.
-// Server use domainRoot ("tunnel.dev") ke saath jod kar "https://gaurav.tunnel.dev" banata hai 
-// aur AuthResponseMessage mein pack karke client ko wapas bhej deta hai.*/
+	// 3. Success Banner
 	fmt.Printf("TUNNEL LIVE AT: %s\n", authResp.AssignedURL)
 	fmt.Println("Press Ctrl+C to quit.")
 
-	// we will setup Yamux Client Session taki acche se transfer ho
-		session, err := client.NewYamuxClientSession(conn)
+	// 4. Setup Yamux Client Session
+	session, err := client.NewYamuxClientSession(conn)
 	if err != nil {
 		slog.Error("failed to create yamux client session", "err", err)
 		os.Exit(1)
 	}
 	defer session.Close()
+
 	slog.Info("Yamux client session ready. Waiting for virtual streams from server...")
+
 	// 5. Incoming virtual streams ka intezar karo (blocking loop)
 	client.ListenForServerStreams(session)
 	slog.Info("Client closing connection and exiting.")
