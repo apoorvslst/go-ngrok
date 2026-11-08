@@ -18,6 +18,7 @@ func StartListener(ctx context.Context, addr string, validToken string, domainRo
 
 	var wg sync.WaitGroup
 
+	// Graceful shutdown listener
 	go func() {
 		<-ctx.Done()
 		slog.Info("\nShutdown signal received, stopping listener...")
@@ -51,8 +52,8 @@ func StartListener(ctx context.Context, addr string, validToken string, domainRo
 
 func handleConnection(conn net.Conn, validToken string, domainRoot string, reg *registry.Registry) {
 	defer conn.Close()
-
 	remoteAddr := conn.RemoteAddr().String()
+
 	slog.Info("new connection accepted", "remote_addr", remoteAddr)
 
 	// 1. Perform Handshake (5-second deadline inside)
