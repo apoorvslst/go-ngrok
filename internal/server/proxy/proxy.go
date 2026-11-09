@@ -12,6 +12,31 @@ import (
 	"github.com/apoorvslst/go-ngrok/internal/server/router"
 )
 
+/*
+Normal Reverse Proxy (jaise Nginx ya Caddy) kaise kaam karta hai?
+Jab Nginx ko request milti hai, toh woh backend tak ek naya TCP connection dial karta hai:
+Visitor -> Nginx -> net.Dial("tcp", "backend:3000") -> Backend
+
+Humare sath problem kya hai?
+Humara backend developer ke ghar ke laptop par hai, jo Wi-Fi Router / NAT ke peeche band hai.
+Server laptop ko net.Dial kar hi nahi sakta!
+
+The Genius Solution:
+Go standard library ka httputil.ReverseProxy internally ek http.Transport use karta hai.
+Aur http.Transport mein ek setting hoti hai: DialContext (jo decide karti hai ki backend se kaise connect hona hai).
+Hum is DialContext function ko hijack (override) kar dete hain!
+
+Normal ReverseProxy:
+  Transport.DialContext ──► net.Dial("tcp", ...) ──► New TCP Connection
+HAMARA ReverseProxy:
+  Transport.DialContext ──► tunnel.Session.OpenStream() ──► Yamux Virtual Stream!
+
+Aur kyunki yamux.Stream Go ke net.Conn interface ko implement karta hai, Go ke ReverseProxy ko
+pata hi nahi chalta ki yeh koi naya socket nahi balki purane TCP connection ke andar ka ek virtual channel hai!
+HTTP headers, request body, query parameters, chunked encoding — sab kuch Go ka built-in
+httputil.ReverseProxy automatically handle kar leta hai!
+*/
+
 // NewTunnelProxy creates an HTTP handler that proxies visitor requests through yamux streams.
 func NewTunnelProxy(reg *registry.Registry, rootDomain string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
