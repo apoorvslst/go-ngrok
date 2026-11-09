@@ -1,10 +1,8 @@
 package client
 
 import (
-	"fmt"
-	"io"
 	"log/slog"
-
+	"github.com/apoorvslst/go-ngrok/internal/client/forwarder"
 	"github.com/hashicorp/yamux"
 )
 /*Jab tak server koi visitor request nahi bhejta, client chupchap efficient sleep
@@ -20,7 +18,7 @@ Client ka AcceptStream() turant jaag jata hai aur uske haath mein ek naya stream
 Aur Client use turant go handleIncomingStream(stream) bolkar ek worker goroutine ko de deta hai
 aur khud wapas agle stream ke intezaar mein so jata hai!*/
 // ListenForServerStreams accepts virtual streams initiated by the server over the Yamux session.
-func ListenForServerStreams(session *yamux.Session) {
+func ListenForServerStreams(session *yamux.Session,localTargetAddr string) {
 	for {
 		// 1. Blocks until server forwards a visitor request via a new virtual stream
 		stream, err := session.AcceptStream()
@@ -34,30 +32,9 @@ func ListenForServerStreams(session *yamux.Session) {
 		)
 
 		// 2. Har stream ko parallel goroutine mein handle karo
-		go handleIncomingStream(stream)
+		go forwarder.ForwardToLocal(stream, localTargetAddr)
 	}
 }
 
-// handleIncomingStream processes an individual virtual stream.
-func handleIncomingStream(stream *yamux.Stream) {
-	defer stream.Close()
-
-	// Day 3 ke test ke liye: Hum stream se padhenge aur ek response return karenge
-	// (Day 5 mein yahan localhost:3000 ka forwarder aayega!)
-	buf := make([]byte, 1024)
-	n, err := stream.Read(buf)
-	if err != nil && err != io.EOF {
-		slog.Error("failed to read from virtual stream", "stream_id", stream.StreamID(), "err", err)
-		return
-	}
-
-	incomingMsg := string(buf[:n])
-	slog.Info("received payload on virtual stream",
-		"stream_id", stream.StreamID(),
-		"payload", incomingMsg,
-	)
-
-	// Stream pe reply likho
-	reply := fmt.Sprintf("ACK: Server sent [%s] over virtual stream %d", incomingMsg, stream.StreamID())
-	stream.Write([]byte(reply))
-}
+// Purana dummy handleIncomingStream function delete ho gaya, aur uski jagah go forwarder.ForwardToLocal(stream, localTargetAddr) lag gaya.
+//Ab jab bhi koi visitor hit karega, client turant ek goroutine launch karke request tumhare local app ko forward karega!
