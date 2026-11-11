@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
-
+	"time"
 	"github.com/apoorvslst/go-ngrok/internal/server/registry"
 )
 
@@ -71,12 +71,15 @@ func handleConnection(conn net.Conn, validToken string, domainRoot string, reg *
 	}
 	defer session.Close()
 
-	// 3. Register the active tunnel in the shared in-memory registry
-	if err := reg.Register(hello.DesiredSubdomain, session, remoteAddr); err != nil {
-		slog.Error("failed to register tunnel in registry", "subdomain", hello.DesiredSubdomain, "err", err)
+	// 3. checking if kya yeh client grace period se reattach ho rha h
+	err = reg.Reattach(hello.DesiredSubdomain,hello.Token,session, remoteAddr) 
+	if err != nil {
+		// Reattach nahi hua it means it is new client's connection hence register karo usko
+		if regErr := reg.Register(hello.DesiredSubdomain,session,remoteAddr,hello.Token); regErr!=nil{
+			slog.Error("failed to register tunnel in registry", "subdomain", hello.DesiredSubdomain, "err", regErr)
 		return
-	}
-	defer reg.Delete(hello.DesiredSubdomain)
+	}}
+	defer reg.MarkGracePeriod(hello.DesiredSubdomain,45*time.Second)
 
 	slog.Info("client authenticated & tunnel registered!",
 		"remote_addr", remoteAddr,

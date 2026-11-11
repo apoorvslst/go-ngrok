@@ -1,4 +1,5 @@
-/*Server ne Yamux stream open karke visitor ka HTTP request wire pe fek diya. Ab client ke laptop par kya hona chahiye?
+/* 
+	Server ne Yamux stream open karke visitor ka HTTP request wire pe fek diya. Ab client ke laptop par kya hona chahiye?
 Jaise hi server se naya stream aata hai, Client laptop par chal rahe local app (localhost:3000) se connect karta hai (net.Dial("tcp", localAddr)).
 Agar local app band hai? Client yamux stream ke andar seedha ek raw HTTP 502 Bad Gateway response likh deta hai! ReverseProxy us response ko visitor ke browser tak bhej deti hai.
 Agar local app chal raha hai? Hum 2 concurrent goroutines launch karte hain:

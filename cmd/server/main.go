@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-
+	"time"
 	"github.com/apoorvslst/go-ngrok/internal/config"
 	"github.com/apoorvslst/go-ngrok/internal/server"
 	"github.com/apoorvslst/go-ngrok/internal/server/httpserver"
@@ -28,7 +28,7 @@ func main() {
 
 	// 1. In-Memory Registry (shared between both listeners)
 	reg := registry.NewRegistry()
-
+	go reg.StartCleaner(ctx,5*time.Second)
 	// 2. Start Public HTTP Listener (:8080) in background goroutine
 	go func() {
 		if err := httpserver.StartPublicListener(PublicAddr, reg, DomainRoot); err != nil && err != http.ErrServerClosed {
