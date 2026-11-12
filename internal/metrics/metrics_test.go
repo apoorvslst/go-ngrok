@@ -42,3 +42,4 @@ func TestInstrumentHandler_NoError(t *testing.T) {
 	InstrumentHandler("rahul", "GET", 45*time.Millisecond, 200, 312, 8420)
 	// If we reach this line without panicking, the test passes.
 }
+
