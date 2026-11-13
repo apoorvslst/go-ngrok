@@ -4,18 +4,19 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestRegistry_RegisterAndGet(t *testing.T) {
 	reg := NewRegistry()
 
-	// 1. Register a client (we can pass nil for yamux.Session in unit tests)
-	err := reg.Register("apoorv", nil, "127.0.0.1:5000")
+	// 1. Register a client with a token
+	err := reg.Register("apoorv", nil, "127.0.0.1:5000", "secret-token")
 	if err != nil {
 		t.Fatalf("expected registration to succeed, got: %v", err)
 	}
 
-	// 2. Lookup existing tunnel
+	// 2. Lookup existing active tunnel
 	tunnel, ok := reg.Get("apoorv")
 	if !ok {
 		t.Fatalf("expected tunnel 'apoorv' to be found")
@@ -35,21 +36,54 @@ func TestRegistry_DuplicateSubdomain(t *testing.T) {
 	reg := NewRegistry()
 
 	// First registration should succeed
-	if err := reg.Register("apoorv", nil, "addr1"); err != nil {
+	if err := reg.Register("apoorv", nil, "addr1", "token1"); err != nil {
 		t.Fatalf("first registration failed: %v", err)
 	}
 
 	// Second registration with the same subdomain must fail!
-	err := reg.Register("apoorv", nil, "addr2")
+	err := reg.Register("apoorv", nil, "addr2", "token2")
 	if err == nil {
 		t.Fatal("expected duplicate registration to return an error, got nil")
+	}
+}
+
+func TestRegistry_GracePeriodAndReattach(t *testing.T) {
+	reg := NewRegistry()
+
+	// 1. Client connects
+	_ = reg.Register("gaurav", nil, "addr1", "my-secret-token")
+
+	// 2. WiFi drops -> Mark Grace Period for 1 second
+	reg.MarkGracePeriod("gaurav", 1*time.Second)
+
+	// 3. Grace period ke dauran visitor lookup fail hona chahiye (tunnel inactive hai)
+	if _, ok := reg.Get("gaurav"); ok {
+		t.Fatalf("tunnel in grace period should not be returned by Get()")
+	}
+
+	// 4. Doosra hacker wrong token se reattach karne ki koshish kare -> Must Fail!
+	err := reg.Reattach("gaurav", "hacker-token", nil, "hacker-addr")
+	if err == nil {
+		t.Fatalf("expected reattach with wrong token to fail")
+	}
+
+	// 5. Asli client matching token se wapas aaye -> Must Succeed!
+	err = reg.Reattach("gaurav", "my-secret-token", nil, "new-addr")
+	if err != nil {
+		t.Fatalf("expected reattach with correct token to succeed, got: %v", err)
+	}
+
+	// 6. Subdomain wapas Active ho gaya!
+	tunnel, ok := reg.Get("gaurav")
+	if !ok || tunnel.State != StateActive {
+		t.Fatalf("expected tunnel to be active again after reattach")
 	}
 }
 
 func TestRegistry_DeleteAndReuse(t *testing.T) {
 	reg := NewRegistry()
 
-	_ = reg.Register("apoorv", nil, "addr1")
+	_ = reg.Register("apoorv", nil, "addr1", "token1")
 
 	// Delete it
 	reg.Delete("apoorv")
@@ -60,7 +94,7 @@ func TestRegistry_DeleteAndReuse(t *testing.T) {
 	}
 
 	// Re-registering with same subdomain should now succeed
-	if err := reg.Register("apoorv", nil, "addr2"); err != nil {
+	if err := reg.Register("apoorv", nil, "addr2", "token2"); err != nil {
 		t.Fatalf("expected re-registration to succeed after deletion: %v", err)
 	}
 }
@@ -71,16 +105,16 @@ func TestRegistry_ConcurrentAccess(t *testing.T) {
 
 	numGoroutines := 100
 
-	// Launch concurrent readers and writers
 	for i := 0; i < numGoroutines; i++ {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
 
 			subdomain := fmt.Sprintf("client-%d", id)
+			token := fmt.Sprintf("token-%d", id)
 
 			// Concurrent Write (Register)
-			_ = reg.Register(subdomain, nil, fmt.Sprintf("10.0.0.%d:8080", id))
+			_ = reg.Register(subdomain, nil, fmt.Sprintf("10.0.0.%d:8080", id), token)
 
 			// Concurrent Read (Get)
 			_, _ = reg.Get(subdomain)
@@ -95,7 +129,5 @@ func TestRegistry_ConcurrentAccess(t *testing.T) {
 		}(i)
 	}
 
-	// Wait for all 100 goroutines to finish
 	wg.Wait()
 }
-
