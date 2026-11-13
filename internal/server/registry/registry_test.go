@@ -17,22 +17,28 @@ func TestRegistry_RegisterAndGet(t *testing.T) {
 		t.Fatalf("expected registration to succeed, got: %v", err)
 	}
 
-	// 2. Lookup existing tunnel
+	// 2. Fetch the client
 	tunnel, ok := reg.Get("apoorv")
 	if !ok {
-		t.Fatalf("expected tunnel 'apoorv' to be found")
+		t.Fatalf("expected to find subdomain 'apoorv', but got false")
 	}
+
+	if tunnel.Subdomain != "apoorv" {
+		t.Errorf("expected subdomain 'apoorv', got '%s'", tunnel.Subdomain)
+	}
+
 	if tunnel.ClientAddr != "127.0.0.1:5000" {
 		t.Errorf("expected client addr '127.0.0.1:5000', got '%s'", tunnel.ClientAddr)
 	}
+
 	if tunnel.State != StateActive {
 		t.Errorf("expected state ACTIVE, got '%s'", tunnel.State)
 	}
 
-	// 3. Lookup nonexistent tunnel
-	_, ok = reg.Get("ghost")
+	// 3. Fetch a non-existent client
+	_, ok = reg.Get("unknown")
 	if ok {
-		t.Errorf("expected 'ghost' to not be found")
+		t.Fatalf("expected 'unknown' subdomain to be not found, but it was found")
 	}
 }
 
@@ -54,32 +60,52 @@ func TestRegistry_DuplicateSubdomain(t *testing.T) {
 func TestRegistry_GracePeriodAndReattach(t *testing.T) {
 	reg := NewRegistry()
 
-	// 1. Register owner
-	_ = reg.Register("apoorv", nil, "addr1", "my-secret-token")
+	// 1. Client connects
+	_ = reg.Register("gaurav", nil, "addr1", "my-secret-token")
 
-	// 2. Client drops -> enter Grace Period
-	reg.MarkGracePeriod("apoorv", 2*time.Second)
+	// 2. WiFi drops -> Mark Grace Period for 1 second
+	reg.MarkGracePeriod("gaurav", 1*time.Second)
 
-	tunnel, ok := reg.Get("apoorv")
-	if !ok || tunnel.State != StateGracePeriod {
-		t.Fatalf("expected tunnel to be in GRACE_PERIOD state")
+	// 3. Grace period ke dauran visitor lookup fail hona chahiye (tunnel inactive hai)
+	if _, ok := reg.Get("gaurav"); ok {
+		t.Fatalf("tunnel in grace period should not be returned by Get()")
 	}
 
-	// 3. Hacker tries to register "apoorv" during grace period -> MUST FAIL!
-	err := reg.Register("apoorv", nil, "hacker-addr", "hacker-token")
+	// 4. Doosra hacker wrong token se reattach karne ki koshish kare -> Must Fail!
+	err := reg.Reattach("gaurav", "hacker-token", nil, "hacker-addr")
 	if err == nil {
-		t.Fatal("expected hacker registration during grace period to be rejected, but it succeeded")
+		t.Fatalf("expected reattach with wrong token to fail")
 	}
 
-	// 4. True owner returns with original token -> MUST SUCCEED (Reclaim)!
-	err = reg.Register("apoorv", nil, "addr2", "my-secret-token")
+	// 5. Asli client matching token se wapas aaye -> Must Succeed!
+	err = reg.Reattach("gaurav", "my-secret-token", nil, "new-addr")
 	if err != nil {
-		t.Fatalf("expected original owner to reclaim tunnel, got: %v", err)
+		t.Fatalf("expected reattach with correct token to succeed, got: %v", err)
 	}
 
-	tunnel, _ = reg.Get("apoorv")
-	if tunnel.State != StateActive {
-		t.Errorf("expected tunnel state to be ACTIVE after reclaim, got %s", tunnel.State)
+	// 6. Subdomain wapas Active ho gaya!
+	tunnel, ok := reg.Get("gaurav")
+	if !ok || tunnel.State != StateActive {
+		t.Fatalf("expected tunnel to be active again after reattach")
+	}
+}
+
+func TestRegistry_DeleteAndReuse(t *testing.T) {
+	reg := NewRegistry()
+
+	_ = reg.Register("apoorv", nil, "addr1", "token1")
+
+	// Delete it
+	reg.Delete("apoorv")
+
+	// Should not be found
+	if _, ok := reg.Get("apoorv"); ok {
+		t.Fatal("expected tunnel to be deleted")
+	}
+
+	// Re-registering with same subdomain should now succeed
+	if err := reg.Register("apoorv", nil, "addr2", "token2"); err != nil {
+		t.Fatalf("expected re-registration to succeed after deletion: %v", err)
 	}
 }
 
@@ -95,18 +121,19 @@ func TestRegistry_CleanerExpiry(t *testing.T) {
 	_ = reg.Register("temp", nil, "addr", "token")
 	reg.MarkGracePeriod("temp", 30*time.Millisecond)
 
-	// Immediately, it should still be in registry
+	// While in grace period, Get() should return false (inactive)
 	_, ok := reg.Get("temp")
-	if !ok {
-		t.Fatal("expected 'temp' to still be in registry immediately after disconnect")
+	if ok {
+		t.Fatal("expected 'temp' to be inactive in Get() during grace period")
 	}
 
 	// Wait 80ms for cleaner to expire and sweep it
 	time.Sleep(80 * time.Millisecond)
 
-	_, ok = reg.Get("temp")
-	if ok {
-		t.Fatal("expected expired grace period tunnel to be cleaned up by background cleaner")
+	// Verify that now registering fresh with a new token works because it was cleaned up
+	err := reg.Register("temp", nil, "new-addr", "different-token")
+	if err != nil {
+		t.Fatalf("expected expired tunnel to be cleaned up and re-registerable: %v", err)
 	}
 }
 
@@ -121,28 +148,21 @@ func TestRegistry_ConcurrentAccess(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-
 			subdomain := fmt.Sprintf("client-%d", id)
+			addr := fmt.Sprintf("10.0.0.%d:8080", id)
 			token := fmt.Sprintf("token-%d", id)
 
-			// Concurrent Write (Register)
-			_ = reg.Register(subdomain, nil, fmt.Sprintf("10.0.0.%d:8080", id), token)
-
-			// Concurrent Read (Get)
+			_ = reg.Register(subdomain, nil, addr, token)
 			_, _ = reg.Get(subdomain)
 
-			// Concurrent Read (ActiveCount)
-			_ = reg.ActiveCount()
-
-			// Concurrent Grace Period transition
 			if id%2 == 0 {
 				reg.MarkGracePeriod(subdomain, 50*time.Millisecond)
+				_ = reg.Reattach(subdomain, token, nil, addr)
 			} else {
 				reg.Delete(subdomain)
 			}
 		}(i)
 	}
 
-	// Wait for all 100 goroutines to finish
 	wg.Wait()
 }

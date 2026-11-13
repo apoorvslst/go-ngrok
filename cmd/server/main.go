@@ -21,7 +21,7 @@ const (
 	PublicAddr  = ":8080"
 )
 
-//Server ke main.go mein hardcoded token aur domain root pass
+// Server ke main.go mein hardcoded token aur domain root pass
 func main() {
 	config.SetupLogger(true)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)

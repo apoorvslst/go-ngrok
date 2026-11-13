@@ -36,38 +36,38 @@ type Registry struct {
 	tunnels map[string]*Tunnel
 }
 
-// NewRegistry initializes and returns a ready-to-use Registry.
+// NewRegistry creates a new, empty in-memory registry.
 func NewRegistry() *Registry {
 	return &Registry{
 		tunnels: make(map[string]*Tunnel),
 	}
 }
 
-// Register adds a tunnel to the registry, or reclaims it if in grace period with matching token.
+// Register adds a tunnel to the registry or checks grace period ownership. Returns error if subdomain already taken.
 func (r *Registry) Register(subdomain string, session *yamux.Session, addr string, token string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	// Check if subdomain is already taken
 	if existing, ok := r.tunnels[subdomain]; ok {
-		// If it is in grace period and the token matches the original owner -> Reclaim!
-		if existing.State == StateGracePeriod && existing.Token == token {
-			existing.State = StateActive
-			existing.Session = session
-			existing.ClientAddr = addr
-			existing.GraceExpiry = time.Time{}
-			slog.Info("tunnel successfully reclaimed from grace period!",
-				"subdomain", subdomain,
-				"client_addr", addr,
-			)
-			return nil
+		// If currently active, reject
+		if existing.State == StateActive {
+			return fmt.Errorf("subdomain '%s' already registered by client %s", subdomain, existing.ClientAddr)
 		}
-
-		// If occupied by someone else (active or in grace period for another token)
-		if existing.State == StateGracePeriod {
-			return fmt.Errorf("subdomain '%s' is currently reserved in grace period", subdomain)
+		// If in grace period by another client, reject
+		if existing.Token != token {
+			return fmt.Errorf("subdomain '%s' is currently reserved in grace period by another client", subdomain)
 		}
-		return fmt.Errorf("subdomain '%s' already registered by client %s", subdomain, existing.ClientAddr)
+		// If in grace period and tokens match, reclaim!
+		existing.State = StateActive
+		existing.Session = session
+		existing.ClientAddr = addr
+		existing.GraceExpiry = time.Time{}
+		slog.Info("tunnel successfully reclaimed from grace period via Register",
+			"subdomain", subdomain,
+			"client_addr", addr,
+		)
+		return nil
 	}
 
 	r.tunnels[subdomain] = &Tunnel{
@@ -79,17 +79,22 @@ func (r *Registry) Register(subdomain string, session *yamux.Session, addr strin
 		CreatedAt:  time.Now(),
 	}
 
-	slog.Info("tunnel registered", "subdomain", subdomain, "client_addr", addr)
+	slog.Info("tunnel registered",
+		"subdomain", subdomain,
+		"client_addr", addr,
+	)
 	return nil
 }
 
-// Get retrieves a tunnel by subdomain. Thread-safe for concurrent reads.
+// Get finds an active tunnel by its subdomain. If tunnel is in grace period or doesn't exist, returns false.
 func (r *Registry) Get(subdomain string) (*Tunnel, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
 	tunnel, ok := r.tunnels[subdomain]
-	return tunnel, ok
+	if !ok || tunnel.State != StateActive {
+		return nil, false
+	}
+	return tunnel, true
 }
 
 // MarkGracePeriod marks a tunnel as disconnected but holds the subdomain reservation.
@@ -122,14 +127,24 @@ func (r *Registry) Reattach(subdomain string, token string, newSession *yamux.Se
 		return errors.New("tunnel not found in registry")
 	}
 
+	if tunnel.State != StateGracePeriod {
+		return fmt.Errorf("subdomain '%s' is not in grace period (state: %s)", subdomain, tunnel.State)
+	}
+
+	if time.Now().After(tunnel.GraceExpiry) {
+		delete(r.tunnels, subdomain)
+		return errors.New("grace period has expired")
+	}
+
 	if tunnel.Token != token {
 		return errors.New("unauthorized: token does not match original tunnel owner")
 	}
 
+	// Reattach successfully
 	tunnel.State = StateActive
 	tunnel.Session = newSession
 	tunnel.ClientAddr = addr
-	tunnel.GraceExpiry = time.Time{} // Clear expiry timer
+	tunnel.GraceExpiry = time.Time{}
 
 	slog.Info("tunnel successfully reattached from grace period!",
 		"subdomain", subdomain,
@@ -147,20 +162,6 @@ func (r *Registry) Delete(subdomain string) {
 		delete(r.tunnels, subdomain)
 		slog.Info("tunnel deregistered permanently", "subdomain", subdomain)
 	}
-}
-
-// ActiveCount returns how many tunnels are currently active (not in grace period).
-func (r *Registry) ActiveCount() int {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	count := 0
-	for _, t := range r.tunnels {
-		if t.State == StateActive {
-			count++
-		}
-	}
-	return count
 }
 
 // StartCleaner periodically removes expired tunnels from grace period.
@@ -184,6 +185,20 @@ func (r *Registry) StartCleaner(ctx context.Context, interval time.Duration) {
 			r.mu.Unlock()
 		}
 	}
+}
+
+// ActiveCount returns how many tunnels are currently active (not in grace period).
+func (r *Registry) ActiveCount() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	count := 0
+	for _, t := range r.tunnels {
+		if t.State == StateActive {
+			count++
+		}
+	}
+	return count
 }
 
 /*
