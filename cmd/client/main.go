@@ -23,9 +23,9 @@ func main() {
 	defer stop()
 
 	token := "dev-secret-token"
-	desiredSubdomain := "gaurav"
-	localTarget := "localhost:3000" // Humara local web app yahan chalega!
-	inspectorAddr := ":4040"        // Web interface port for live traffic inspector
+	desiredSubdomain := "apoorv"
+	localTarget := "localhost:3000"
+	inspectorAddr := ":4040"
 
 	// 1. Day 7 Inspector Engine initialize karo (100 requests fixed ring buffer)
 	inspectorStorage := inspector.NewRingBuffer(100)
@@ -43,21 +43,19 @@ func main() {
 	bCfg := client.BackoffConfig{
 		BaseDelay:  1 * time.Second,
 		MaxDelay:   15 * time.Second,
-		MaxRetries: 0, // 0 = retry forever until user presses Ctrl+C
+		MaxRetries: 0,
 	}
 
-	slog.Info("GoNgrok Client starting with auto-reconnect and inspector...", "subdomain", desiredSubdomain)
+	slog.Info("GoNgrok Client starting with auto-reconnect and inspector...", "subdomain", desiredSubdomain, "target", localTarget)
 
-	// 🔥 Auto-Reconnect Engine (Saara connect/handshake iske andar hoga)
+	// 🔥 Auto-Reconnect Engine
 	err := client.RetryWithBackoff(ctx, bCfg, "tunnel-client", func() error {
-		// 1. Server se connect karo
 		conn, err := client.Connect("localhost:9000")
 		if err != nil {
 			return fmt.Errorf("connection error: %w", err)
 		}
 		defer conn.Close()
 
-		// 2. Handshake karo (agar fail ho toh return error taaki retry ho sake)
 		authResp, err := client.PerformClientHandshake(conn, token, desiredSubdomain)
 		if err != nil {
 			return fmt.Errorf("handshake failed: %w", err)
@@ -68,7 +66,6 @@ func main() {
 		dashboard.RenderBanner()
 		fmt.Println("Press Ctrl+C to quit.")
 
-		// 3. Yamux Session elevate karo
 		session, err := client.NewYamuxClientSession(conn)
 		if err != nil {
 			return fmt.Errorf("yamux client session failed: %w", err)
@@ -77,10 +74,8 @@ func main() {
 
 		slog.Info("Yamux client session ready. Forwarding traffic to local app...")
 
-		// 4. Stream listener loop (blocks until connection breaks)
 		client.ListenForServerStreams(session, localTarget)
 
-		// Connection break hua, loop wapas retry karega!
 		return fmt.Errorf("connection lost, initiating reconnect...")
 	})
 
